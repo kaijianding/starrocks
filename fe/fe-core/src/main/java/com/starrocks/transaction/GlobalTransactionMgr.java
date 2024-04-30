@@ -49,8 +49,11 @@ import com.starrocks.common.UserException;
 import com.starrocks.common.util.concurrent.lock.LockTimeoutException;
 import com.starrocks.common.util.concurrent.lock.LockType;
 import com.starrocks.common.util.concurrent.lock.Locker;
+import com.starrocks.load.loadv2.ManualLoadTxnCommitAttachment;
 import com.starrocks.memory.MemoryTrackable;
 import com.starrocks.metric.MetricRepo;
+import com.starrocks.metric.TableMetricsEntity;
+import com.starrocks.metric.TableMetricsRegistry;
 import com.starrocks.persist.metablock.SRMetaBlockEOFException;
 import com.starrocks.persist.metablock.SRMetaBlockException;
 import com.starrocks.persist.metablock.SRMetaBlockID;
@@ -319,6 +322,7 @@ public class GlobalTransactionMgr implements MemoryTrackable {
         }
 
         MetricRepo.COUNTER_LOAD_FINISHED.increase(1L);
+        updateTableMetricsEntity(transactionState);
         stopWatch.stop();
         long publishTimeoutMillis = timeoutMillis - stopWatch.getTime();
         if (publishTimeoutMillis < 0) {
@@ -329,6 +333,22 @@ public class GlobalTransactionMgr implements MemoryTrackable {
         if (!waiter.await(publishTimeoutMillis, TimeUnit.MILLISECONDS)) {
             throw new UserException("publish timeout: " + timeoutMillis);
         }
+    }
+
+    private void updateTableMetricsEntity(TransactionState transactionState) {
+        if (transactionState.getTableIdList().isEmpty()) {
+            return;
+        }
+        TxnCommitAttachment attachment = transactionState.getTxnCommitAttachment();
+        if (!(attachment instanceof ManualLoadTxnCommitAttachment)) {
+            return;
+        }
+        long tableId = transactionState.getTableIdList().get(0);
+        ManualLoadTxnCommitAttachment streamAttachment = (ManualLoadTxnCommitAttachment) attachment;
+        TableMetricsEntity entity = TableMetricsRegistry.getInstance().getMetricsEntity(tableId);
+        entity.counterStreamLoadFinishedTotal.increase(1L);
+        entity.counterStreamLoadRowsTotal.increase(streamAttachment.getLoadedRows());
+        entity.counterStreamLoadBytesTotal.increase(streamAttachment.getLoadedBytes());
     }
 
     public boolean commitAndPublishTransaction(@NotNull Database db,
