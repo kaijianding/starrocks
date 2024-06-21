@@ -184,7 +184,9 @@ public class MvRefreshArbiter {
                 TableProperty.QueryRewriteConsistencyMode.LOOSE);
         Expr partitionExpr = mv.getFirstPartitionRefTableExpr();
         Map<Table, Column> partitionTableAndColumn = mv.getRelatedPartitionTableAndColumn();
-        Map<String, Range<PartitionKey>> mvRangePartitionMap = mv.getRangePartitionMap();
+        Map<String, Range<PartitionKey>> mvRangePartitionMap = mv.getRangePartitionMap().entrySet().stream().filter(
+                        e -> mv.getPartition(e.getKey()).hasStorageData())
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         RangePartitionDiff rangePartitionDiff = null;
         try {
             if (!collectBaseTablePartitionInfos(mv, partitionTableAndColumn, partitionExpr, isQueryRewrite, mvUpdateInfo)) {
@@ -194,6 +196,9 @@ public class MvRefreshArbiter {
             Map<Table, Map<String, Range<PartitionKey>>> refBaseTablePartitionMap = baseTableUpdateInfos.entrySet().stream()
                     .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().getPartitionNameWithRanges()));
             Table partitionTable = mv.getDirectTableAndPartitionColumn().first;
+            // skip the partition version check for partitions in mvRangePartitionMap
+            baseTableUpdateInfos.get(partitionTable).getToRefreshPartitionNames()
+                    .removeAll(mvRangePartitionMap.keySet());
             PartitionDiffer differ = PartitionDiffer.build(mv, Pair.create(null, null));
             rangePartitionDiff = PartitionUtil.getPartitionDiff(partitionExpr,
                     refBaseTablePartitionMap.get(partitionTable), mvRangePartitionMap, differ);
