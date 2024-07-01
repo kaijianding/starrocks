@@ -721,7 +721,7 @@ public class AggregatedMaterializedViewRewriter extends MaterializedViewRewriter
         }
 
         boolean isRewrittenByEquivalent = result.second.isRewrittenByEquivalent();
-        if (isRewrittenByEquivalent) {
+        if (isRewrittenByEquivalent || equationRewriter.isColWithOnlyGroupByKeys(aggCall)) {
             Preconditions.checkState(targetColumn instanceof CallOperator);
             return (CallOperator) targetColumn;
         } else {

@@ -357,22 +357,22 @@ public class MaterializedViewManualTest extends MaterializedViewTestBase {
             }
             {
                 String query = "select t1a, sum(if(t1b=0, t1b, 0)) as total from test.test_all_type group by t1a;";
-                sql(query).notContain("mv0");
+                sql(query).contains("mv0");
             }
             {
                 String query = "select t1a, sum(if(murmur_hash3_32(t1b %3) = 0, t1b, 0)) as total from test.test_all_type group" +
                         " by t1a;";
-                sql(query).notContain("mv0");
+                sql(query).contains("mv0");
             }
             {
                 String query = "select t1a, sum(case when(t1b=0) then t1b else 0 end) as total from test.test_all_type " +
                         "group by t1a;";
-                sql(query).notContain("mv0");
+                sql(query).contains("mv0");
             }
             {
                 String query = "select t1a, sum(case when(t1b=0) then t1b else 0 end) as total from test.test_all_type " +
                         "group by t1a;";
-                sql(query).notContain("mv0");
+                sql(query).contains("mv0");
             }
         });
     }
@@ -384,11 +384,11 @@ public class MaterializedViewManualTest extends MaterializedViewTestBase {
                 " as select sum(t1f) as total, t1a, t1b from test.test_all_type group by t1a, t1b;", () -> {
             {
                 String query = "select t1a, sum(t1b) as total from test.test_all_type group by t1a;";
-                sql(query).nonMatch("mv0");
+                sql(query).match("mv0");
             }
             {
                 String query = "select t1a, sum(t1b + 1) as total from test.test_all_type group by t1a;";
-                sql(query).nonMatch("mv0");
+                sql(query).match("mv0");
             }
         });
     }
