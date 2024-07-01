@@ -124,6 +124,7 @@ statement
     | adminCheckTabletsStatement
     | adminSetPartitionVersion
     | killStatement
+    | killRunningQueryStatement
     | syncStatement
     | executeScriptStatement
 
@@ -684,6 +685,10 @@ adminSetPartitionVersion
 
 killStatement
     : KILL (CONNECTION? | QUERY) INTEGER_VALUE
+    ;
+
+killRunningQueryStatement
+    : KILL RUNNING QUERY string
     ;
 
 syncStatement

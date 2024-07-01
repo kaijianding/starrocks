@@ -116,6 +116,7 @@ import com.starrocks.qe.QueryState.MysqlStateType;
 import com.starrocks.qe.scheduler.Coordinator;
 import com.starrocks.qe.scheduler.FeExecuteCoordinator;
 import com.starrocks.server.GlobalStateMgr;
+import com.starrocks.service.ExecuteEnv;
 import com.starrocks.sql.ExplainAnalyzer;
 import com.starrocks.sql.PrepareStmtPlanner;
 import com.starrocks.sql.StatementPlanner;
@@ -150,6 +151,7 @@ import com.starrocks.sql.ast.ExecuteStmt;
 import com.starrocks.sql.ast.ExportStmt;
 import com.starrocks.sql.ast.InsertStmt;
 import com.starrocks.sql.ast.KillAnalyzeStmt;
+import com.starrocks.sql.ast.KillRunningQueryStmt;
 import com.starrocks.sql.ast.KillStmt;
 import com.starrocks.sql.ast.PrepareStmt;
 import com.starrocks.sql.ast.QueryStatement;
@@ -189,6 +191,7 @@ import com.starrocks.statistic.StatisticExecutor;
 import com.starrocks.statistic.StatisticUtils;
 import com.starrocks.statistic.StatisticsCollectJobFactory;
 import com.starrocks.statistic.StatsConstants;
+import com.starrocks.system.Frontend;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.task.LoadEtlTask;
 import com.starrocks.thrift.TDescriptorTable;
@@ -670,6 +673,8 @@ public class StmtExecutor {
                 handleShow();
             } else if (parsedStmt instanceof KillStmt) {
                 handleKill();
+            } else if (parsedStmt instanceof KillRunningQueryStmt) {
+                handleKillRunningQuery();
             } else if (parsedStmt instanceof ExportStmt) {
                 handleExportStmt(context.getQueryId());
             } else if (parsedStmt instanceof UnsupportedStmt) {
@@ -992,6 +997,11 @@ public class StmtExecutor {
         if (killCtx == null) {
             ErrorReport.reportDdlException(ErrorCode.ERR_NO_SUCH_THREAD, id);
         }
+        handleKill(killCtx, killStmt.isConnectionKill());
+    }
+
+    // Handle kill statement.
+    private void handleKill(ConnectContext killCtx, boolean killConnection) {
         Preconditions.checkNotNull(killCtx);
         if (context == killCtx) {
             // Suicide
@@ -1008,9 +1018,45 @@ public class StmtExecutor {
                             PrivilegeType.OPERATE.name(), ObjectType.SYSTEM.name(), null);
                 }
             }
-            killCtx.kill(killStmt.isConnectionKill(), "killed by kill statement : " + originStmt);
+            killCtx.kill(killConnection, "killed by kill statement : " + originStmt);
         }
         context.getState().setOk();
+    }
+
+    // Handle kill running query statement.
+    private void handleKillRunningQuery() throws DdlException {
+        KillRunningQueryStmt killStmt = (KillRunningQueryStmt) parsedStmt;
+        // > 0 means it is forwarded from other fe
+        if (context.getForwardTimes() == 0) {
+            String errorMsg = null;
+            // forward to all fe
+            for (Frontend fe : GlobalStateMgr.getCurrentState().getNodeMgr().getFrontends(null /* all */)) {
+                LeaderOpExecutor leaderOpExecutor =
+                        new LeaderOpExecutor(Pair.create(fe.getHost(), fe.getRpcPort()), parsedStmt, originStmt,
+                                context, redirectStatus);
+                try {
+                    leaderOpExecutor.execute();
+                    // if query is successfully killed by this fe, it can return now
+                    if (context.getState().getStateType() == MysqlStateType.OK) {
+                        context.getState().setOk();
+                        return;
+                    }
+                    errorMsg = context.getState().getErrorMessage();
+                } catch (Exception e) {
+                    errorMsg = e.getMessage();
+                    LOG.warn(e.getMessage(), e);
+                }
+            }
+            // if the customQueryId is not found in any fe, print the error message
+            context.getState().setError(errorMsg == null ? ErrorCode.ERR_UNKNOWN_ERROR.formatErrorMsg() : errorMsg);
+            return;
+        }
+        String customQueryId = killStmt.getCustomQueryId();
+        ConnectContext killCtx = ExecuteEnv.getInstance().getScheduler().findContext(customQueryId);
+        if (killCtx == null) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_NO_SUCH_QUERY, customQueryId);
+        }
+        handleKill(killCtx, false);
     }
 
     // Process set statement.

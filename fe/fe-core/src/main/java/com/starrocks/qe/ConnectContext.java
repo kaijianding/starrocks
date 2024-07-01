@@ -117,6 +117,9 @@ public class ConnectContext {
     // the same queryId
     protected UUID queryId;
 
+    // An customQueryId is a `user specified` id to track a user's request
+    protected String customQueryId;
+
     // A request will be executed multiple times because of retry or redirect.
     // This id is used to distinguish between different execution instances
     protected TUniqueId executionId;
@@ -281,6 +284,7 @@ public class ConnectContext {
             this.dumpInfo = new QueryDumpInfo(this);
         }
         this.sessionId = UUIDUtil.genUUID();
+        this.customQueryId = "";
     }
 
     public void putPreparedStmt(String stmtName, PrepareStmtContext ctx) {
@@ -601,6 +605,14 @@ public class ConnectContext {
 
     public void setLastQueryId(UUID queryId) {
         this.lastQueryId = queryId;
+    }
+
+    public String getCustomQueryId() {
+        return customQueryId;
+    }
+
+    public void setCustomQueryId(String customQueryId) {
+        this.customQueryId = customQueryId;
     }
 
     public boolean isProfileEnabled() {

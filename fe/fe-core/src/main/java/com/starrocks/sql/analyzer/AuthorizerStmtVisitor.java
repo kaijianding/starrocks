@@ -133,6 +133,7 @@ import com.starrocks.sql.ast.GrantRoleStmt;
 import com.starrocks.sql.ast.InsertStmt;
 import com.starrocks.sql.ast.InstallPluginStmt;
 import com.starrocks.sql.ast.KillAnalyzeStmt;
+import com.starrocks.sql.ast.KillRunningQueryStmt;
 import com.starrocks.sql.ast.KillStmt;
 import com.starrocks.sql.ast.LoadStmt;
 import com.starrocks.sql.ast.PauseRoutineLoadStmt;
@@ -2136,6 +2137,12 @@ public class AuthorizerStmtVisitor implements AstVisitor<Void, ConnectContext> {
     @Override
     public Void visitKillStatement(KillStmt statement, ConnectContext context) {
         // Privilege is checked in execution logic, see `StatementExecutor#handleKill()` for details.
+        return null;
+    }
+
+    @Override
+    public Void visitKillRunningQueryStatement(KillRunningQueryStmt statement, ConnectContext context) {
+        // Privilege is checked in execution logic, see `StatementExecutor#handleKillRunningQuery()` for details.
         return null;
     }
 

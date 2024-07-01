@@ -305,6 +305,7 @@ public class ConnectProcessor {
 
         // execute this query.
         StatementBase parsedStmt = null;
+        boolean hasQuery = false;
         try {
             ctx.setQueryId(UUIDUtil.genUUID());
             List<StatementBase> stmts;
@@ -330,6 +331,13 @@ public class ConnectProcessor {
                     ((PrepareStmt) parsedStmt).setName(String.valueOf(ctx.getStmtId()));
                     if (!(((PrepareStmt) parsedStmt).getInnerStmt() instanceof QueryStatement)) {
                         ErrorReport.reportAnalysisException(ErrorCode.ERR_UNSUPPORTED_PS, ErrorType.UNSUPPORTED);
+                    }
+                }
+                hasQuery = parsedStmt instanceof QueryStatement;
+                if (hasQuery) {
+                    if (StringUtils.isEmpty(ctx.getCustomQueryId())) {
+                        String customQueryId = ctx.getSessionVariable().getCustomQueryId();
+                        ctx.setCustomQueryId(customQueryId);
                     }
                 }
                 parsedStmt.setOrigStmt(new OriginStatement(originStmt, i));
@@ -382,6 +390,11 @@ public class ConnectProcessor {
             ctx.getState().setErrType(QueryState.ErrType.INTERNAL_ERR);
         } finally {
             Tracers.close();
+            if (hasQuery) {
+                // custom_query_id session is temporary, should be cleared after query finished
+                ctx.getSessionVariable().setCustomQueryId("");
+                ctx.setCustomQueryId("");
+            }
         }
 
         // audit after exec
@@ -840,6 +853,7 @@ public class ConnectProcessor {
         }
         result.setPacket(getResultPacket());
         result.setState(ctx.getState().getStateType().toString());
+        result.setErrorMsg(ctx.getState().getErrorMessage());
         if (executor != null) {
             if (executor.getProxyResultSet() != null) {  // show statement
                 result.setResultSet(executor.getProxyResultSet().tothrift());

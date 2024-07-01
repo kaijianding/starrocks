@@ -269,6 +269,7 @@ import com.starrocks.sql.ast.IntervalLiteral;
 import com.starrocks.sql.ast.JoinRelation;
 import com.starrocks.sql.ast.KeysDesc;
 import com.starrocks.sql.ast.KillAnalyzeStmt;
+import com.starrocks.sql.ast.KillRunningQueryStmt;
 import com.starrocks.sql.ast.KillStmt;
 import com.starrocks.sql.ast.LambdaArgument;
 import com.starrocks.sql.ast.LambdaFunctionExpr;
@@ -2287,6 +2288,12 @@ public class AstBuilder extends StarRocksBaseVisitor<ParseNode> {
         } else {
             return new KillStmt(true, id, pos);
         }
+    }
+
+    @Override
+    public ParseNode visitKillRunningQueryStatement(StarRocksParser.KillRunningQueryStatementContext context) {
+        StringLiteral stringLiteral = (StringLiteral) visit(context.string());
+        return new KillRunningQueryStmt(stringLiteral.getStringValue(), createPos(context));
     }
 
     @Override
