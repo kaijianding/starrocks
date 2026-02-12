@@ -1164,6 +1164,12 @@ public class Config extends ConfigBase {
     public static int stream_load_max_txn_num_per_be = -1;
 
     /**
+     * Max prepare transaction timeout
+     */
+    @ConfField(mutable = true)
+    public static int prepare_transaction_max_timeout_second = 86400; // 1day
+
+    /**
      * Default prepared transaction timeout
      */
     @ConfField(mutable = true)

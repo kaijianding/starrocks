@@ -39,6 +39,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.annotations.VisibleForTesting;
 import com.starrocks.catalog.Database;
+import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.LabelAlreadyUsedException;
 import com.starrocks.common.StarRocksException;
@@ -359,6 +360,9 @@ public class TransactionLoadAction extends RestBaseAction {
                 .map(Long::parseLong)
                 .map(sec -> sec * 1000L)
                 .orElse(DEFAULT_TXN_TIMEOUT_MILLIS);
+        if (timeoutMillis > Config.prepare_transaction_max_timeout_second * 1000L) {
+            timeoutMillis = Config.prepare_transaction_max_timeout_second * 1000L;
+        }
         Long preparedTimeoutMillis = Optional.ofNullable(request.getRequest().headers().get(PREPARED_TIMEOUT_KEY))
                 .map(Long::parseLong)
                 .map(sec -> sec * 1000L)
