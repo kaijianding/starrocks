@@ -41,8 +41,10 @@
 #include "base/brpc/brpc.h"
 #include "base/concurrency/spinlock.h"
 #include "base/network/network_util.h"
+#include "base/time/time.h"
 #include "common/brpc/internal_service_recoverable_stub.h"
 #include "common/bthread_timer.h"
+#include "common/logging.h"
 #include "common/statusor.h"
 #include "gen_cpp/Types_types.h" // TNetworkAddress
 
@@ -57,14 +59,46 @@ class MetricRegistry;
 constexpr int TIMER_TASK_RUNNING = 1;
 
 template <typename StubCacheT>
-class EndpointCleanupTask : public BthreadLightTimerTask {
+class EndpointCleanupTask : public BthreadTimerTask {
 public:
-    EndpointCleanupTask(StubCacheT* cache, const butil::EndPoint& endpoint) : _cache(cache), _endpoint(endpoint){};
-    void Run() override { _cache->cleanup_expired(_endpoint); }
+    // ttl_seconds is the cache-wide expire window (config::brpc_stub_expire_s).
+    EndpointCleanupTask(StubCacheT* cache, const butil::EndPoint& endpoint, int64_t ttl_seconds)
+            : _cache(cache), _endpoint(endpoint), _ttl_seconds(ttl_seconds) {}
+    // The actual cleanup/renewal decision must run while the cache's _lock is held so
+    // that _stopping and _deadline are observed atomically with the cache state.
+    void Run() override {
+        std::lock_guard<SpinLock> l(_cache->_lock);
+        if (_cache->_stopping) {
+            return;
+        }
+        int64_t now_us = butil::gettimeofday_us();
+        if (now_us >= _deadline) {
+            LOG(INFO) << "cleanup brpc stub, endpoint:" << _endpoint << ", idle for " << (now_us - _deadline) / 1000
+                      << "ms past deadline";
+            _cache->_stub_map.erase(_endpoint);
+            return;
+        }
+        timespec tm = butil::microseconds_to_timespec(_deadline);
+        auto status = _cache->_timer->schedule(this, tm);
+        if (!status.ok()) {
+            LOG(WARNING) << "Failed to reschedule brpc cleanup task: " << _endpoint;
+        }
+    }
+
+    // Reset the absolute deadline (in butil::gettimeofday_us() units) used by the next
+    // Run() invocation to decide between evict and reschedule. Caller must hold the
+    // cache lock.
+    void renew_deadline_locked(int64_t new_deadline) { _deadline = new_deadline; }
+    int64_t deadline_locked() const { return _deadline; }
 
 private:
     StubCacheT* _cache;
     butil::EndPoint _endpoint;
+    // Absolute deadline (in butil::gettimeofday_us() units) used to decide whether a
+    // firing task should evict the stub or simply reschedule itself. Read/written only
+    // under the cache's _lock, so it does not need to be atomic.
+    int64_t _deadline{0};
+    int64_t _ttl_seconds{0};
 };
 
 class BrpcStubCache {
@@ -75,9 +109,13 @@ public:
     std::shared_ptr<PInternalService_RecoverableStub> get_stub(const butil::EndPoint& endpoint);
     std::shared_ptr<PInternalService_RecoverableStub> get_stub(const TNetworkAddress& taddr);
     std::shared_ptr<PInternalService_RecoverableStub> get_stub(const std::string& host, int port);
-    void cleanup_expired(const butil::EndPoint& endpoint);
 
 private:
+    // EndpointCleanupTask::Run() inspects _stub_map, _timer, and _stopping to decide
+    // whether to evict or reschedule, all under _lock. Granting direct private access
+    // keeps the cache's hot path free of public mutators reserved for the timer.
+    friend class EndpointCleanupTask<BrpcStubCache>;
+
     struct Metrics;
     struct StubPool {
         StubPool();
@@ -93,6 +131,10 @@ private:
     butil::FlatMap<butil::EndPoint, std::shared_ptr<StubPool>> _stub_map;
     BthreadTimer* _timer;
     std::unique_ptr<Metrics> _metrics;
+    // Flipped to true by the destructor (and shutdown) before tasks are joined. While
+    // set, a firing EndpointCleanupTask must not reschedule itself; otherwise it could
+    // outlive the cache and dereference a dangling _cache pointer in its Run().
+    bool _stopping{false};
 };
 
 class HttpBrpcStubCache {
@@ -103,19 +145,26 @@ public:
     static void initialize(BthreadTimer* timer);
     static HttpBrpcStubCache* getInstance();
     StatusOr<std::shared_ptr<PInternalService_RecoverableStub>> get_http_stub(const TNetworkAddress& taddr);
-    void cleanup_expired(const butil::EndPoint& endpoint);
     void shutdown();
 
 private:
     explicit HttpBrpcStubCache(BthreadTimer* timer);
     ~HttpBrpcStubCache();
     void bind_timer(BthreadTimer* timer);
+    // See BrpcStubCache::friend declaration; same rationale applies here.
+    friend class EndpointCleanupTask<HttpBrpcStubCache>;
+
+    struct StubEntry {
+        std::shared_ptr<PInternalService_RecoverableStub> stub;
+        std::shared_ptr<EndpointCleanupTask<HttpBrpcStubCache>> cleanup_task;
+    };
 
     SpinLock _lock;
-    butil::FlatMap<butil::EndPoint, std::pair<std::shared_ptr<PInternalService_RecoverableStub>,
-                                              std::shared_ptr<EndpointCleanupTask<HttpBrpcStubCache>>>>
-            _stub_map;
+    butil::FlatMap<butil::EndPoint, StubEntry> _stub_map;
     BthreadTimer* _timer;
+    // See BrpcStubCache::_stopping. Prevents in-flight Run() calls from rescheduling
+    // themselves after shutdown has cleared the cache state.
+    bool _stopping{false};
 };
 
 #ifndef __APPLE__
@@ -127,19 +176,26 @@ public:
     static void initialize(BthreadTimer* timer);
     static LakeServiceBrpcStubCache* getInstance();
     StatusOr<std::shared_ptr<starrocks::LakeService_RecoverableStub>> get_stub(const std::string& host, int port);
-    void cleanup_expired(const butil::EndPoint& endpoint);
     void shutdown();
 
 private:
     explicit LakeServiceBrpcStubCache(BthreadTimer* timer);
     ~LakeServiceBrpcStubCache();
     void bind_timer(BthreadTimer* timer);
+    // See BrpcStubCache::friend declaration; same rationale applies here.
+    friend class EndpointCleanupTask<LakeServiceBrpcStubCache>;
+
+    struct StubEntry {
+        std::shared_ptr<LakeService_RecoverableStub> stub;
+        std::shared_ptr<EndpointCleanupTask<LakeServiceBrpcStubCache>> cleanup_task;
+    };
 
     SpinLock _lock;
-    butil::FlatMap<butil::EndPoint, std::pair<std::shared_ptr<LakeService_RecoverableStub>,
-                                              std::shared_ptr<EndpointCleanupTask<LakeServiceBrpcStubCache>>>>
-            _stub_map;
+    butil::FlatMap<butil::EndPoint, StubEntry> _stub_map;
     BthreadTimer* _timer;
+    // See BrpcStubCache::_stopping. Prevents in-flight Run() calls from rescheduling
+    // themselves after shutdown has cleared the cache state.
+    bool _stopping{false};
 };
 #endif
 
